@@ -18,7 +18,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "tavily"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -31,6 +31,8 @@ const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
+
+const TAVILY_API_ENDPOINT = "https://api.tavily.com/search";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -137,6 +139,21 @@ type PerplexitySearchResponse = {
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
 
+type TavilySearchResult = {
+  title: string;
+  url: string;
+  content: string;
+  raw_content?: string;
+  score: number;
+  published_date?: string;
+};
+
+type TavilySearchResponse = {
+  results: TavilySearchResult[];
+  query: string;
+  response_time: number;
+};
+
 function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
@@ -185,7 +202,8 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
       ? normalizeSecretInput(search.apiKey)
       : "";
   const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
-  return fromConfig || fromEnv || undefined;
+  const fromEnvTavily = normalizeSecretInput(process.env.TAVILY_API_KEY);
+  return fromConfig || fromEnv || fromEnvTavily || undefined;
 }
 
 function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
@@ -203,6 +221,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       message:
         "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.search.grok.apiKey.",
       docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
+  if (provider === "tavily") {
+    return {
+      error: "missing_tavily_api_key",
+      message:
+        "web_search (tavily) needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure tools.web.search.tavily.apiKey.",
+      docs: "https://tavily.com",
     };
   }
   return {
@@ -225,6 +251,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "brave") {
     return "brave";
+  }
+  if (raw === "tavily") {
+    return "tavily";
   }
   return "brave";
 }
@@ -549,6 +578,52 @@ async function runGrokSearch(params: {
   return { content, citations, inlineCitations };
 }
 
+async function runTavilySearch(params: {
+  query: string;
+  apiKey: string;
+  timeoutSeconds: number;
+  count: number;
+}): Promise<{
+  content: string;
+  citations: string[];
+}> {
+  const body = {
+    api_key: params.apiKey,
+    query: params.query,
+    search_depth: "basic",
+    include_answer: true,
+    include_raw_content: false,
+    max_results: params.count,
+  };
+
+  const res = await fetch(TAVILY_API_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detail = await readResponseText(res);
+    throw new Error(`Tavily API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as TavilySearchResponse;
+  const results = data.results || [];
+  
+  // Tavily sometimes returns an AI answer, or we can synthesize from snippets
+  // We'll construct a content string from the results
+  const content = results
+    .map((r, i) => `[${i + 1}] ${r.title}\n${r.content}`)
+    .join("\n\n");
+
+  const citations = results.map((r) => r.url);
+
+  return { content, citations };
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -570,7 +645,9 @@ async function runWebSearch(params: {
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        : params.provider === "grok" 
+          ? `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
+          : `${params.provider}:${params.query}:${params.count}`
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -630,6 +707,32 @@ async function runWebSearch(params: {
       content: wrapWebContent(content),
       citations,
       inlineCitations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "tavily") {
+    const { content, citations } = await runTavilySearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      timeoutSeconds: params.timeoutSeconds,
+      count: params.count,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: params.count,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(content),
+      citations,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -720,7 +823,9 @@ export function createWebSearchTool(options?: {
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : provider === "tavily"
+          ? "Search the web using Tavily. Optimized for AI agents, returns clean content and answers."
+          : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",

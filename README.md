@@ -1,4 +1,4 @@
-# 🦞 OpenClaw — Personal AI Assistant
+# 🦞 OpenClaw — Personal AI Assistant (Enhanced Fork)
 
 <p align="center">
     <picture>
@@ -12,11 +12,31 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/openclaw/openclaw/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/openclaw/openclaw/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
-  <a href="https://github.com/openclaw/openclaw/releases"><img src="https://img.shields.io/github/v/release/openclaw/openclaw?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
-  <a href="https://discord.gg/clawd"><img src="https://img.shields.io/discord/1456350064065904867?label=Discord&logo=discord&logoColor=white&color=5865F2&style=for-the-badge" alt="Discord"></a>
+  <a href="https://github.com/openclaw/openclaw"><img src="https://img.shields.io/badge/Upstream-openclaw%2Fopenclaw-blue?style=for-the-badge" alt="Upstream"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
+
+> [!NOTE]
+> This is an **enhanced fork** of [OpenClaw](https://github.com/openclaw/openclaw) with the following additions:
+
+## ✨ What's New in This Fork
+
+### 🔍 Tavily Web Search Integration
+- Added **[Tavily](https://tavily.com/)** as a web search provider alongside the default SearXNG.
+- Tavily provides high-quality, AI-optimized search results — no self-hosted infrastructure required.
+- Simply set `TAVILY_API_KEY` in your `.env` and configure `webSearch.provider: "tavily"` in `openclaw.json`.
+
+### 🐳 Optimized Dockerfile
+- Removed expensive recursive `chown -R` operations during Docker build, significantly reducing build times and image layer sizes.
+
+### 🆓 Free Model Support (OpenRouter)
+- Pre-configured to work with **free models via [OpenRouter](https://openrouter.ai/)** (e.g., `arcee-ai/trinity-large-preview:free`, `stepfun/step-3.5-flash:free`).
+- No paid API keys required to get started — just an OpenRouter account.
+
+### 📱 Telegram Channel Ready
+- Pre-configured Telegram bot channel support out of the box.
+
+---
 
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
 It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
